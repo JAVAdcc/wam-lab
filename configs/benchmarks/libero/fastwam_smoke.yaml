@@ -1,0 +1,28 @@
+# Minimal FastWAM + LIBERO smoke run.
+# Use --no-docker when running inside the prepared wam-lab/FastWAM environment.
+server:
+  url: "ws://localhost:8000"
+  timeout: 300
+
+
+output_dir: "./results/fastwam_libero_smoke"
+
+benchmarks:
+  - benchmark: "vla_eval.benchmarks.libero.benchmark:LIBEROBenchmark"
+    name: "libero_fastwam_smoke"
+    episodes_per_task: 1
+    max_tasks: 1
+    max_steps: 120
+    params:
+      suite: libero_spatial
+      seed: 7
+      env_seed: 0
+      num_steps_wait: 30
+      send_wrist_image: true
+      send_state: true
+      send_raw_libero_obs: true
+      send_privileged_3d: false
+    recording:
+      record_video: true
+      record_step: true
+      video_fps: 10

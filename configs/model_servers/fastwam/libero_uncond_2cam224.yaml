@@ -1,0 +1,19 @@
+# FastWAM release checkpoint server for LIBERO.
+# Run with the FastWAM environment, not a generic vla-eval uv env:
+#   ~/workspace/envs/fastwam/bin/fastwam-python \
+#     src/vla_eval/model_servers/fastwam.py \
+#     --config configs/model_servers/fastwam/libero_uncond_2cam224.yaml
+script: "src/vla_eval/model_servers/fastwam.py"
+port: 8000
+args:
+  fastwam_root: "~/workspace/code/FastWAM"
+  checkpoint: "~/workspace/code/FastWAM/checkpoints/fastwam_release/libero_uncond_2cam224.pt"
+  dataset_stats_path: "~/workspace/code/FastWAM/checkpoints/fastwam_release/libero_uncond_2cam224_dataset_stats.json"
+  task_config: "libero_uncond_2cam224_1e-4"
+  config_name: "sim_libero"
+  device: "cuda"
+  mixed_precision: "bf16"
+  num_inference_steps: 10
+  chunk_size: 10
+  extra_overrides:
+    - "model.redirect_common_files=false"

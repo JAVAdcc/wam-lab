@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "vla-eval"
 dynamic = ["version"]
-description = "Evaluation harness for Vision-Language-Action models"
+description = "WAM-Lab: lightweight WAM policy evaluation harness for manipulation simulators"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "Apache-2.0"}
@@ -47,6 +47,7 @@ packages = ["src/vla_eval"]
 
 [project.scripts]
 vla-eval = "vla_eval.cli.main:main"
+wam-lab = "vla_eval.cli.main:main"
 
 [tool.pytest.ini_options]
 # Explicit so discovery doesn't creep into anywhere else a stray
@@ -57,7 +58,7 @@ testpaths = ["tests", "leaderboard/tests"]
 # Pin resolution to a known-good date so `uv sync` from a fresh clone
 # won't pick up a newly-published (and potentially compromised) dep
 # version without explicit intent. Bump when intentionally upgrading.
-exclude-newer = "2026-04-22"
+exclude-newer = "2026-04-22T00:00:00Z"
 
 [tool.ruff]
 line-length = 119

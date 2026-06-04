@@ -1,3 +1,11 @@
+# WAM-Lab
+
+WAM-Lab is a lightweight fork of `vla-evaluation-harness` focused on evaluating World Action Model policies in manipulation simulators. Phase 1 targets the released FastWAM LIBERO checkpoint, then extends the same bridge toward sparse 3D / privileged-state experiments.
+
+Start with [docs/WAM_LAB_PHASE1.md](docs/WAM_LAB_PHASE1.md) for the FastWAM + LIBERO runbook.
+
+---
+
 # vla-evaluation-harness
 
 [![CI](https://github.com/allenai/vla-evaluation-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/allenai/vla-evaluation-harness/actions/workflows/ci.yml)

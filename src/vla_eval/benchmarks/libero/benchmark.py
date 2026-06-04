@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import os
+import functools
+from pathlib import Path
+from contextlib import contextmanager
 from typing import Any
 
 import math
@@ -18,14 +21,82 @@ from vla_eval.specs import (
     LANGUAGE,
     POSITION_DELTA,
     ROTATION_AA,
+    RAW,
     STATE_EEF_POS_AA_GRIP,
     DimSpec,
 )
 from vla_eval.types import Action, EpisodeResult, Observation, Task
 
 # EGL for headless rendering
-os.environ.setdefault("EGL_PLATFORM", "device")
-os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+_DEFAULT_WORKSPACE_ROOT = Path(os.environ.get("WAM_LAB_WORKSPACE_ROOT", Path.home() / "workspace")).expanduser()
+os.environ.setdefault("MUJOCO_GL", "egl")
+
+
+def _bootstrap_headless_rendering() -> None:
+    """Prepare user-space EGL config lazily before robosuite imports."""
+    if os.environ.get("MUJOCO_GL") != "egl":
+        return
+    egl_vendor_file = Path(
+        os.environ.get("WAM_LAB_EGL_VENDOR_FILE", str(_DEFAULT_WORKSPACE_ROOT / ".egl" / "nvidia_icd.json"))
+    ).expanduser()
+    if "__EGL_VENDOR_LIBRARY_FILENAMES" not in os.environ:
+        egl_vendor_file.parent.mkdir(parents=True, exist_ok=True)
+        if not egl_vendor_file.exists():
+            egl_vendor_file.write_text(
+                '{"file_format_version": "1.0.0", "ICD": {"library_path": "libEGL_nvidia.so.0"}}\n',
+                encoding="utf-8",
+            )
+        os.environ["__EGL_VENDOR_LIBRARY_FILENAMES"] = str(egl_vendor_file)
+    os.environ.setdefault("EGL_PLATFORM", "device")
+    os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+
+
+def _ensure_libero_config() -> None:
+    """Create a non-interactive LIBERO path config under the user workspace."""
+    config_root = Path(os.environ.get("LIBERO_CONFIG_PATH", str(_DEFAULT_WORKSPACE_ROOT / ".libero"))).expanduser()
+    os.environ.setdefault("LIBERO_CONFIG_PATH", str(config_root))
+    config_file = config_root / "config.yaml"
+    if config_file.exists():
+        return
+
+    benchmark_root = Path(
+        os.environ.get("LIBERO_BENCHMARK_ROOT", str(_DEFAULT_WORKSPACE_ROOT / "code" / "LIBERO" / "libero" / "libero"))
+    ).expanduser()
+    dataset_root = Path(
+        os.environ.get("LIBERO_DATASET_ROOT", str(_DEFAULT_WORKSPACE_ROOT / "data" / "libero" / "datasets"))
+    ).expanduser()
+    config_root.mkdir(parents=True, exist_ok=True)
+    dataset_root.mkdir(parents=True, exist_ok=True)
+    config = {
+        "benchmark_root": str(benchmark_root),
+        "bddl_files": str(benchmark_root / "bddl_files"),
+        "init_states": str(benchmark_root / "init_files"),
+        "datasets": str(dataset_root),
+        "assets": str(benchmark_root / "assets"),
+    }
+
+    import yaml
+
+    config_file.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+
+@contextmanager
+def _libero_torch_load_compat():
+    """Temporarily use PyTorch pre-2.6 torch.load semantics for LIBERO init states."""
+    import torch
+
+    original_torch_load = torch.load
+
+    @functools.wraps(original_torch_load)
+    def patched_load(*args, **kwargs):
+        kwargs.setdefault("weights_only", False)
+        return original_torch_load(*args, **kwargs)
+
+    torch.load = patched_load
+    try:
+        yield
+    finally:
+        torch.load = original_torch_load
 
 
 def _quat_to_axisangle_robosuite(quat: np.ndarray) -> np.ndarray:
@@ -58,11 +129,11 @@ class LIBEROBenchmark(StepBenchmark):
 
     Non-obvious behaviors:
         - **PyTorch compat**: Patches ``torch.load`` to use
-          ``weights_only=False`` for PyTorch ≥2.6 compatibility with LIBERO's
-          initial-state files (numpy arrays stored via ``torch.save``).
-        - **Headless rendering**: Sets ``EGL_PLATFORM=device`` and
-          ``PYOPENGL_PLATFORM=egl`` on import for GPU-accelerated headless
-          rendering.
+          ``weights_only=False`` only while loading LIBERO initial-state files
+          (numpy arrays stored via ``torch.save``).
+        - **Headless rendering**: Lazily sets ``EGL_PLATFORM=device`` and
+          ``PYOPENGL_PLATFORM=egl`` before LIBERO/robosuite imports for
+          GPU-accelerated headless rendering.
         - **Dummy wait steps**: At episode start, ``num_steps_wait`` steps
           (default 10) are executed with a fixed open-gripper action to let
           objects settle in the physics simulation.
@@ -88,7 +159,7 @@ class LIBEROBenchmark(StepBenchmark):
             OpenVLA reference uses ``env_seed=0`` separately from ``seed=7``.
     """
 
-    _ALL_RECORD_FIELDS = frozenset({"reward", "done", "success"})
+    _ALL_RECORD_FIELDS = frozenset({"reward", "done", "success", "privileged_3d_summary"})
 
     def __init__(
         self,
@@ -101,6 +172,12 @@ class LIBEROBenchmark(StepBenchmark):
         max_steps: int | None = None,
         env_seed: int | None = None,
         quat_no_antipodal: bool = False,
+        send_raw_libero_obs: bool = False,
+        send_privileged_3d: bool = False,
+        camera_depths: bool = False,
+        camera_segmentations: Any = None,
+        pointcloud_stride: int | None = None,
+        record_privileged_summary: bool = False,
     ) -> None:
         super().__init__()
         self.suite = suite
@@ -112,6 +189,14 @@ class LIBEROBenchmark(StepBenchmark):
         self.send_state = send_state
         self.absolute_action = absolute_action
         self._max_steps = max_steps
+        self.send_raw_libero_obs = send_raw_libero_obs
+        self.send_privileged_3d = send_privileged_3d
+        self.camera_depths = bool(camera_depths or send_privileged_3d)
+        if camera_segmentations is None and send_privileged_3d:
+            camera_segmentations = ["instance", "element"]
+        self.camera_segmentations = camera_segmentations
+        self.pointcloud_stride = pointcloud_stride
+        self.record_privileged_summary = record_privileged_summary
         self._env = None
         self._task_suite = None
         self._current_task_id: int | None = None
@@ -128,21 +213,8 @@ class LIBEROBenchmark(StepBenchmark):
         """Lazily initialize LIBERO (heavy imports)."""
         if self._task_suite is not None:
             return
-        # LIBERO init states use torch.save with numpy arrays.
-        # PyTorch ≥2.6 defaults weights_only=True which blocks numpy globals.
-        # Patch torch.load to default weights_only=False for LIBERO compatibility.
-        import functools
-
-        import torch
-
-        _original_torch_load = torch.load
-
-        @functools.wraps(_original_torch_load)
-        def _patched_load(*args, **kwargs):
-            kwargs.setdefault("weights_only", False)
-            return _original_torch_load(*args, **kwargs)
-
-        torch.load = _patched_load
+        _bootstrap_headless_rendering()
+        _ensure_libero_config()
 
         from libero.libero import benchmark
 
@@ -185,6 +257,8 @@ class LIBEROBenchmark(StepBenchmark):
                 "bddl_file_name": str(bddl_file),
                 "camera_heights": LIBERO_ENV_RESOLUTION,
                 "camera_widths": LIBERO_ENV_RESOLUTION,
+                "camera_depths": self.camera_depths,
+                "camera_segmentations": self.camera_segmentations,
             }
             env = OffScreenRenderEnv(**env_args)
             env.seed(self.env_seed)
@@ -196,7 +270,8 @@ class LIBEROBenchmark(StepBenchmark):
 
         # Set initial state
         assert self._task_suite is not None
-        initial_states = self._task_suite.get_task_init_states(task_id)
+        with _libero_torch_load_compat():
+            initial_states = self._task_suite.get_task_init_states(task_id)
         obs = self._env.set_init_state(initial_states[episode_idx])
 
         # Run dummy action wait steps (always in delta mode to avoid slamming to origin)
@@ -227,7 +302,10 @@ class LIBEROBenchmark(StepBenchmark):
         assert self._env is not None
         obs, reward, done, info = self._env.step(processed_action)
         self._recorder.record_video(self._extract_frame(obs))
-        self._recorder.record_step(reward=float(reward), done=bool(done), success=bool(done))
+        record_fields: dict[str, Any] = {"reward": float(reward), "done": bool(done), "success": bool(done)}
+        if self.record_privileged_summary and self.send_privileged_3d:
+            record_fields["privileged_3d_summary"] = self._privileged_summary(obs)
+        self._recorder.record_step(**record_fields)
         return StepResult(obs=obs, reward=reward, done=done, info=info)
 
     @staticmethod
@@ -246,6 +324,7 @@ class LIBEROBenchmark(StepBenchmark):
         obs_dict: dict[str, Any] = {
             "images": {"agentview": img},
             "task_description": task["name"],
+            "language": task["name"],
         }
 
         if self.send_wrist_image:
@@ -271,7 +350,153 @@ class LIBEROBenchmark(StepBenchmark):
                 [ee_pos, ee_aa, np.asarray(raw_obs["robot0_gripper_qpos"], dtype=np.float32)]
             )
 
+        if self.send_raw_libero_obs:
+            obs_dict["raw_libero_obs"] = self._extract_raw_libero_obs(raw_obs)
+
+        if self.send_privileged_3d:
+            obs_dict["privileged_3d"] = self._extract_privileged_3d(raw_obs)
+
         return obs_dict
+
+    @staticmethod
+    def _extract_raw_libero_obs(raw_obs: Any) -> dict[str, Any]:
+        keys = [
+            "agentview_image",
+            "robot0_eye_in_hand_image",
+            "robot0_eef_pos",
+            "robot0_eef_quat",
+            "robot0_gripper_qpos",
+        ]
+        out = {key: raw_obs[key] for key in keys if key in raw_obs}
+        for key, value in raw_obs.items():
+            if key.endswith("_depth") or "_segmentation_" in key:
+                out[key] = value
+        missing = [key for key in keys if key not in out]
+        if missing:
+            raise KeyError(f"LIBERO raw observation missing required keys: {missing}")
+        return out
+
+    def _extract_privileged_3d(self, raw_obs: Any) -> dict[str, Any]:
+        assert self._env is not None
+        sim = self._env.sim
+        inner_env = self._env.env
+        privileged: dict[str, Any] = {
+            "object_poses": self._object_poses(inner_env),
+            "contacts": self._contacts(sim),
+            "cameras": self._camera_calibration(sim),
+            "mesh_summary": self._mesh_summary(sim),
+        }
+        depth = {k: v for k, v in raw_obs.items() if k.endswith("_depth")}
+        segmentation = {k: v for k, v in raw_obs.items() if "_segmentation_" in k}
+        if depth:
+            privileged["depth"] = depth
+        if segmentation:
+            privileged["segmentation"] = segmentation
+        if self.pointcloud_stride is not None and depth:
+            privileged["pointcloud"] = self._sample_pointcloud(sim, depth, segmentation, int(self.pointcloud_stride))
+        return privileged
+
+    @staticmethod
+    def _object_poses(inner_env: Any) -> dict[str, dict[str, Any]]:
+        poses: dict[str, dict[str, Any]] = {}
+        for name, body_id in getattr(inner_env, "obj_body_id", {}).items():
+            poses[str(name)] = {
+                "pos": np.asarray(inner_env.sim.data.body_xpos[body_id], dtype=np.float32),
+                "quat_wxyz": np.asarray(inner_env.sim.data.body_xquat[body_id], dtype=np.float32),
+            }
+        return poses
+
+    @staticmethod
+    def _contacts(sim: Any) -> list[dict[str, Any]]:
+        contacts = []
+        for contact in sim.data.contact[: sim.data.ncon]:
+            contacts.append(
+                {
+                    "geom1": sim.model.geom_id2name(contact.geom1),
+                    "geom2": sim.model.geom_id2name(contact.geom2),
+                    "dist": float(contact.dist),
+                }
+            )
+        return contacts
+
+    def _camera_calibration(self, sim: Any) -> dict[str, dict[str, np.ndarray]]:
+        from robosuite.utils.camera_utils import get_camera_extrinsic_matrix, get_camera_intrinsic_matrix
+
+        cameras: dict[str, dict[str, np.ndarray]] = {}
+        camera_names = getattr(self._env.env, "camera_names", ["agentview", "robot0_eye_in_hand"])
+        camera_heights = getattr(self._env.env, "camera_heights", [LIBERO_ENV_RESOLUTION] * len(camera_names))
+        camera_widths = getattr(self._env.env, "camera_widths", [LIBERO_ENV_RESOLUTION] * len(camera_names))
+        for name, height, width in zip(camera_names, camera_heights, camera_widths):
+            cameras[str(name)] = {
+                "intrinsic": get_camera_intrinsic_matrix(sim, str(name), int(height), int(width)).astype(np.float32),
+                "extrinsic": get_camera_extrinsic_matrix(sim, str(name)).astype(np.float32),
+            }
+        return cameras
+
+    @staticmethod
+    def _mesh_summary(sim: Any) -> dict[str, Any]:
+        mesh_names = []
+        for mesh_id in range(int(getattr(sim.model, "nmesh", 0))):
+            try:
+                mesh_names.append(sim.model.mesh_id2name(mesh_id))
+            except Exception:
+                mesh_names.append(str(mesh_id))
+        return {"nmesh": int(getattr(sim.model, "nmesh", 0)), "mesh_names": mesh_names}
+
+    def _sample_pointcloud(
+        self,
+        sim: Any,
+        depth_by_key: dict[str, np.ndarray],
+        segmentation_by_key: dict[str, np.ndarray],
+        stride: int,
+    ) -> dict[str, dict[str, np.ndarray]]:
+        from robosuite.utils.camera_utils import (
+            get_camera_extrinsic_matrix,
+            get_camera_intrinsic_matrix,
+            get_real_depth_map,
+        )
+
+        stride = max(1, int(stride))
+        clouds: dict[str, dict[str, np.ndarray]] = {}
+        for depth_key, depth in depth_by_key.items():
+            camera_name = depth_key[: -len("_depth")]
+            depth_arr = np.asarray(depth).squeeze()
+            if depth_arr.size == 0:
+                continue
+            if float(np.nanmax(depth_arr)) <= 1.0 and float(np.nanmin(depth_arr)) >= 0.0:
+                depth_arr = get_real_depth_map(sim, depth_arr)
+            height, width = depth_arr.shape
+            rows, cols = np.mgrid[0:height:stride, 0:width:stride]
+            z = depth_arr[rows, cols].reshape(-1).astype(np.float32)
+            valid = np.isfinite(z) & (z > 0)
+            rows_f = rows.reshape(-1).astype(np.float32)[valid]
+            cols_f = cols.reshape(-1).astype(np.float32)[valid]
+            z = z[valid]
+            k = get_camera_intrinsic_matrix(sim, camera_name, height, width).astype(np.float32)
+            ext = get_camera_extrinsic_matrix(sim, camera_name).astype(np.float32)
+            x = (cols_f - k[0, 2]) * z / k[0, 0]
+            y = (rows_f - k[1, 2]) * z / k[1, 1]
+            cam_points = np.stack([x, y, z, np.ones_like(z)], axis=1)
+            world_points = (ext @ cam_points.T).T[:, :3].astype(np.float32)
+            cloud: dict[str, np.ndarray] = {"xyz": world_points}
+            seg_key = f"{camera_name}_segmentation_instance"
+            if seg_key in segmentation_by_key:
+                seg = np.asarray(segmentation_by_key[seg_key]).squeeze()
+                labels = seg[rows.reshape(-1)[valid], cols.reshape(-1)[valid]]
+                cloud["segmentation_instance"] = labels.astype(np.int32)
+            clouds[camera_name] = cloud
+        return clouds
+
+    def _privileged_summary(self, raw_obs: Any) -> dict[str, Any]:
+        assert self._env is not None
+        sim = self._env.sim
+        inner_env = self._env.env
+        return {
+            "num_objects": len(getattr(inner_env, "obj_body_id", {})),
+            "num_contacts": int(sim.data.ncon),
+            "depth_keys": sorted([k for k in raw_obs if k.endswith("_depth")]),
+            "segmentation_keys": sorted([k for k in raw_obs if "_segmentation_" in k]),
+        }
 
     def check_done(self, step_result: StepResult) -> bool:
         return step_result.done
@@ -302,6 +527,10 @@ class LIBEROBenchmark(StepBenchmark):
             spec["wrist"] = IMAGE_RGB
         if self.send_state:
             spec["state"] = STATE_EEF_POS_AA_GRIP
+        if self.send_raw_libero_obs:
+            spec["raw_libero_obs"] = RAW
+        if self.send_privileged_3d:
+            spec["privileged_3d"] = RAW
         return spec
 
     def render(self) -> np.ndarray | None:
