@@ -15,6 +15,7 @@ from typing import Any
 
 import numpy as np
 
+from vla_eval.contracts import InterfaceContract
 from vla_eval.model_servers.base import SessionContext
 from vla_eval.model_servers.predict import PredictModelServer
 from vla_eval.specs import (
@@ -51,6 +52,27 @@ class FastWAMLiberoServer(PredictModelServer):
         chunk_size: Number of actions served from each sampled chunk before
             the server replans.
     """
+
+    @classmethod
+    def interface_contract(cls) -> InterfaceContract:
+        """Return the FastWAM-LIBERO wire contract without loading weights."""
+        return InterfaceContract(
+            name="fastwam_libero",
+            action_spec={"position": POSITION_DELTA, "rotation": ROTATION_AA, "gripper": GRIPPER_CLOSE_POS},
+            observation_spec={
+                "language": LANGUAGE,
+                "raw_libero_obs": RAW,
+            },
+            observation_params={
+                "send_raw_libero_obs": True,
+            },
+            required_payload_keys=("raw_libero_obs", "task_description"),
+            source="vla_eval.model_servers.fastwam:FastWAMLiberoServer",
+            notes=(
+                "Uses FastWAM's LIBERO eval preprocessing; requires LIBERO raw obs.",
+                "Not benchmark-agnostic until additional FastWAM benchmark adapters exist.",
+            ),
+        )
 
     def __init__(
         self,
@@ -102,25 +124,15 @@ class FastWAMLiberoServer(PredictModelServer):
         self._init_fastwam()
 
     def get_observation_params(self) -> dict[str, Any]:
-        params: dict[str, Any] = {
-            "send_wrist_image": True,
-            "send_state": True,
-            "send_raw_libero_obs": True,
-        }
+        params: dict[str, Any] = dict(self.interface_contract().observation_params)
         params.update(self._extra_obs_params)
         return params
 
     def get_action_spec(self) -> dict[str, DimSpec]:
-        return {"position": POSITION_DELTA, "rotation": ROTATION_AA, "gripper": GRIPPER_CLOSE_POS}
+        return dict(self.interface_contract().action_spec)
 
     def get_observation_spec(self) -> dict[str, DimSpec]:
-        return {
-            "agentview": IMAGE_RGB,
-            "wrist": IMAGE_RGB,
-            "state": STATE_EEF_POS_AA_GRIP,
-            "language": LANGUAGE,
-            "raw_libero_obs": RAW,
-        }
+        return dict(self.interface_contract().observation_spec)
 
     def _init_fastwam(self) -> None:
         if not self.fastwam_root.is_dir():

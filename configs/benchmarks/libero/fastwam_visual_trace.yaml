@@ -1,0 +1,32 @@
+# FastWAM + LIBERO visual trace run.
+# This records compact sparse 3D features per environment step for later 3D replay.
+server:
+  url: "ws://localhost:8000"
+  timeout: 300
+
+
+output_dir: "./results/fastwam_libero_visual_trace"
+
+benchmarks:
+  - benchmark: "vla_eval.benchmarks.libero.benchmark:LIBEROBenchmark"
+    name: "libero_fastwam_visual_trace"
+    episodes_per_task: 1
+    max_tasks: 1
+    max_steps: 120
+    params:
+      suite: libero_spatial
+      seed: 7
+      env_seed: 0
+      num_steps_wait: 30
+      send_raw_libero_obs: true
+      send_privileged_3d: false
+      pointcloud_stride: 16
+      record_privileged_summary: true
+      record_sparse_3d: true
+      sparse_pointcloud_voxel_size: 0.02
+      sparse_pointcloud_max_points: 2048
+    recording:
+      record_video: true
+      record_step: true
+      step_fields: [reward, done, success, privileged_3d_summary, sparse_3d]
+      video_fps: 10

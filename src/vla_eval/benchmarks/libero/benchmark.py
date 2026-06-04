@@ -14,6 +14,7 @@ import numpy as np
 
 from vla_eval.benchmarks.base import StepBenchmark, StepResult
 from vla_eval.benchmarks.libero.utils import preprocess_libero_image
+from vla_eval.features.sparse3d import SparseSceneConfig, extract_sparse_scene_features
 from vla_eval.rotation import matrix_to_quat, quat_to_axisangle
 from vla_eval.specs import (
     GRIPPER_CLOSE_POS,
@@ -159,7 +160,7 @@ class LIBEROBenchmark(StepBenchmark):
             OpenVLA reference uses ``env_seed=0`` separately from ``seed=7``.
     """
 
-    _ALL_RECORD_FIELDS = frozenset({"reward", "done", "success", "privileged_3d_summary"})
+    _ALL_RECORD_FIELDS = frozenset({"reward", "done", "success", "privileged_3d_summary", "sparse_3d"})
 
     def __init__(
         self,
@@ -178,6 +179,9 @@ class LIBEROBenchmark(StepBenchmark):
         camera_segmentations: Any = None,
         pointcloud_stride: int | None = None,
         record_privileged_summary: bool = False,
+        record_sparse_3d: bool = False,
+        sparse_pointcloud_voxel_size: float | None = 0.02,
+        sparse_pointcloud_max_points: int | None = 2048,
     ) -> None:
         super().__init__()
         self.suite = suite
@@ -190,13 +194,19 @@ class LIBEROBenchmark(StepBenchmark):
         self.absolute_action = absolute_action
         self._max_steps = max_steps
         self.send_raw_libero_obs = send_raw_libero_obs
-        self.send_privileged_3d = send_privileged_3d
-        self.camera_depths = bool(camera_depths or send_privileged_3d)
-        if camera_segmentations is None and send_privileged_3d:
+        self.record_sparse_3d = record_sparse_3d
+        self.send_privileged_3d = bool(send_privileged_3d)
+        self._enable_privileged_3d = bool(send_privileged_3d or record_sparse_3d)
+        self.camera_depths = bool(camera_depths or self._enable_privileged_3d)
+        if camera_segmentations is None and self._enable_privileged_3d:
             camera_segmentations = ["instance", "element"]
         self.camera_segmentations = camera_segmentations
-        self.pointcloud_stride = pointcloud_stride
+        self.pointcloud_stride = 16 if record_sparse_3d and pointcloud_stride is None else pointcloud_stride
         self.record_privileged_summary = record_privileged_summary
+        self._sparse_scene_config = SparseSceneConfig(
+            voxel_size=sparse_pointcloud_voxel_size,
+            max_points=sparse_pointcloud_max_points,
+        )
         self._env = None
         self._task_suite = None
         self._current_task_id: int | None = None
@@ -303,8 +313,13 @@ class LIBEROBenchmark(StepBenchmark):
         obs, reward, done, info = self._env.step(processed_action)
         self._recorder.record_video(self._extract_frame(obs))
         record_fields: dict[str, Any] = {"reward": float(reward), "done": bool(done), "success": bool(done)}
-        if self.record_privileged_summary and self.send_privileged_3d:
+        if self.record_privileged_summary and self._enable_privileged_3d:
             record_fields["privileged_3d_summary"] = self._privileged_summary(obs)
+        if self.record_sparse_3d and self._enable_privileged_3d:
+            record_fields["sparse_3d"] = extract_sparse_scene_features(
+                self._extract_privileged_3d(obs),
+                self._sparse_scene_config,
+            )
         self._recorder.record_step(**record_fields)
         return StepResult(obs=obs, reward=reward, done=done, info=info)
 
