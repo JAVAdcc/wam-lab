@@ -10,30 +10,30 @@ readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "Apache-2.0"}
 dependencies = [
-    "anyio>=4.0.0",
+    "anyio>=4.12.1",
     "imageio[ffmpeg]",      # Streaming mp4 writer for benchmarks/video.py
-    "jsonargparse[signatures]>=4.36",  # class-signature-driven argparse + yaml
+    "jsonargparse[signatures]>=4.49.0",  # class-signature-driven argparse + yaml
     "lazyregistry>=0.4.0",  # Python 3.8 support
-    "msgpack>=1.0.0",
-    "numpy>=1.24",
+    "msgpack>=1.1.2",
+    "numpy>=2.0.2",
     "omegaconf",
-    "pillow>=9.4.0",        # PIL.Image.ExifTags introduced in 9.4.0
-    "pyyaml>=6.0",          # Security fixes (CVE-2020-14343) + Python 3.11
-    "rich>=13.0",
+    "pillow>=11.3.0",        # PIL.Image.ExifTags introduced in 9.4.0
+    "pyyaml>=6.0.3",          # Security fixes (CVE-2020-14343) + Python 3.11
+    "rich>=15.0.0",
     "tqdm",
-    "websockets>=12.0",
+    "websockets>=15.0.1",
 ]
 
 [dependency-groups]
-dev = ["jsonschema>=4.0", "pytest>=8.0", "ruff>=0.9", "ty>=0.0.18"]
+dev = ["jsonschema>=4.25.1", "pytest>=8.4.2", "ruff>=0.15.15", "ty>=0.0.43"]
 # Runtime deps for leaderboard/scripts (refine, extract, sync_external…).
 # Tooling (pytest, jsonschema) comes from `dev`, so CI can sync
 # `--dev --group leaderboard --no-install-project` to get a lean env
 # for leaderboard tests without pulling vla_eval's runtime.
 leaderboard = [
-    "beautifulsoup4>=4.12",
-    "markdownify>=0.14",
-    "typer>=0.12",
+    "beautifulsoup4>=4.14.3",
+    "markdownify>=1.2.2",
+    "typer>=0.23.2",
 ]
 
 [tool.hatch.version]
