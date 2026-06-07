@@ -1,0 +1,39 @@
+# FastWAM + LIBERO live simulation view.
+# Open an SSH tunnel to live_video_config.port, then view the running rollout
+# in a browser. This streams the same rendered LIBERO agentview frames that are
+# saved to the episode mp4; it is not a point-cloud or 3D-trace reconstruction.
+server:
+  url: "ws://localhost:8000"
+  timeout: 300
+
+
+output_dir: "./results/fastwam_libero_live_sim"
+
+benchmarks:
+  - benchmark: "vla_eval.benchmarks.libero.benchmark:LIBEROBenchmark"
+    name: "libero_fastwam_live_sim"
+    mode: realtime
+    hz: 5.0
+    wait_first_action: true
+    paced: true
+    episodes_per_task: 1
+    max_tasks: 1
+    max_steps: 120
+    params:
+      suite: libero_spatial
+      seed: 7
+      env_seed: 0
+      num_steps_wait: 30
+      send_wrist_image: true
+      send_state: true
+      send_raw_libero_obs: true
+      send_privileged_3d: false
+    recording:
+      record_video: true
+      record_step: true
+      video_fps: 10
+      live_video: true
+      live_video_config:
+        host: "127.0.0.1"
+        port: 8765
+        title: "FastWAM LIBERO live simulation"

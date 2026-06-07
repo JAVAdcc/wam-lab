@@ -413,6 +413,8 @@ class Orchestrator:
             record_video=bool(rec_cfg.get("record_video", True)),
             record_step=bool(rec_cfg.get("record_step", True)),
             video_fps=int(rec_cfg.get("video_fps", 20)),
+            live_video=bool(rec_cfg.get("live_video", False)),
+            live_video_config=rec_cfg.get("live_video_config"),
             step_fields=rec_cfg.get("step_fields"),
             allowed_fields=allowed,
         )

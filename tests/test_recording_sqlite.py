@@ -150,6 +150,47 @@ def test_jsonl_path_is_relative_to_db_dir(tmp_path: Path) -> None:
     assert jsonl_path == "episodes/task_success.jsonl"
 
 
+def test_episode_recorder_live_video_can_run_without_mp4(monkeypatch, tmp_path: Path) -> None:
+    """``record_video=False`` must not disable the optional live-video sink."""
+    events: list[tuple[str, object]] = []
+
+    class FakeLiveVideo:
+        def mark_episode(self, metadata):
+            events.append(("mark", dict(metadata)))
+
+        def publish(self, frame, metadata=None):
+            events.append(("publish", (frame.copy(), dict(metadata or {}))))
+
+    monkeypatch.setattr("vla_eval.live_video.ensure_live_video_server", lambda cfg: FakeLiveVideo())
+
+    store = RecordingStore(tmp_path / "recording.sqlite")
+    rec = EpisodeRecorder(
+        store=store,
+        sid="s",
+        eid="e",
+        eval_id="ev",
+        output_dir=tmp_path / "episodes",
+        filename_stem="task_{status}",
+        context={"name": "task", "episode_idx": 0},
+        record_video=False,
+        live_video=True,
+        live_video_config={"host": "127.0.0.1", "port": 9876},
+    )
+    frame = np.full((8, 8, 3), 127, dtype=np.uint8)
+    rec.record_video(frame)
+    rec.close(status="success", metrics={"success": True}, task_name="task", episode_id=0, steps=1)
+    store.close()
+
+    assert events[0][0] == "mark"
+    assert events[0][1]["status"] == "started"
+    assert events[1][0] == "publish"
+    published_frame, metadata = events[1][1]
+    assert np.asarray(published_frame).shape == (8, 8, 3)
+    assert metadata["status"] == "running"
+    assert metadata["name"] == "task"
+    assert events[-1][1]["status"] == "success"
+
+
 # ---------------------------------------------------------------------------
 # Multi-writer: orchestrator + model server -style fan-in
 # ---------------------------------------------------------------------------

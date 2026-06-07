@@ -1,0 +1,29 @@
+# FastWAM + LIBERO-Spatial adapter sweep.
+# Runs every LIBERO-Spatial task once with the released FastWAM checkpoint.
+# This is broader than the smoke test but not the full official benchmark
+# (which would require many initial states per task and additional suites).
+server:
+  url: "ws://localhost:8000"
+  timeout: 300
+
+
+output_dir: "./results/fastwam_libero_spatial_1trial"
+
+benchmarks:
+  - benchmark: "vla_eval.benchmarks.libero.benchmark:LIBEROBenchmark"
+    name: "libero_fastwam_spatial_1trial"
+    episodes_per_task: 1
+    max_steps: 220
+    params:
+      suite: libero_spatial
+      seed: 7
+      env_seed: 0
+      num_steps_wait: 30
+      send_wrist_image: true
+      send_state: true
+      send_raw_libero_obs: true
+      send_privileged_3d: false
+    recording:
+      record_video: true
+      record_step: true
+      video_fps: 10

@@ -232,6 +232,8 @@ class EpisodeRecorder:
         record_video: bool = True,
         record_step: bool = True,
         video_fps: int = 20,
+        live_video: bool = False,
+        live_video_config: dict[str, Any] | None = None,
         step_fields: Iterable[str] | None = None,
         allowed_fields: Iterable[str] | None = None,
     ) -> None:
@@ -247,6 +249,7 @@ class EpisodeRecorder:
         self._next_step = 0
         self._closed = False
         self._video: Any = None
+        self._live_video: Any = None
         # step_fields=None → record everything in ``allowed_fields`` (or
         # everything, if both are None). Explicit empty list = record nothing.
         allowed = frozenset(allowed_fields) if allowed_fields is not None else None
@@ -277,6 +280,15 @@ class EpisodeRecorder:
             except Exception:
                 logger.exception("EpisodeVideoRecorder.start failed; video disabled for this episode")
                 self._video = None
+        if live_video:
+            try:
+                from vla_eval.live_video import ensure_live_video_server
+
+                self._live_video = ensure_live_video_server(live_video_config)
+                self._live_video.mark_episode({"status": "started", **self._context})
+            except Exception:
+                logger.exception("live_video setup failed; continuing without live stream")
+                self._live_video = None
 
     # -- Identifiers -------------------------------------------------------
 
@@ -306,9 +318,19 @@ class EpisodeRecorder:
     def record_video(self, frame: "np.ndarray | None") -> None:
         """Append one frame to the per-episode mp4. ``None`` is a no-op so
         benchmarks can pass ``self._extract_frame(obs)`` directly."""
-        if frame is None or self._video is None:
+        if frame is None:
             return
-        self._video.record(frame)
+        if self._video is not None:
+            self._video.record(frame)
+        if self._live_video is not None:
+            self._live_video.publish(
+                frame,
+                metadata={
+                    "status": "running",
+                    **self._context,
+                    "step": self._next_step,
+                },
+            )
 
     def record_step(self, **fields: Any) -> None:
         """``step_fields`` filters caller keys; ``step`` kwarg overrides
@@ -347,6 +369,12 @@ class EpisodeRecorder:
             except Exception:
                 logger.exception("video.save failed for sid=%s eid=%s", self._sid, self._eid)
             self._video = None
+        if self._live_video is not None:
+            try:
+                self._live_video.mark_episode({"status": status, **self._context, "steps": steps})
+            except Exception:
+                logger.exception("live_video status update failed for sid=%s eid=%s", self._sid, self._eid)
+            self._live_video = None
 
         try:
             jsonl_name = (self._filename_stem + ".jsonl").format(status=status, **self._context)
@@ -395,6 +423,7 @@ class NullEpisodeRecorder(EpisodeRecorder):
     def __init__(self) -> None:  # type: ignore[override]
         self._closed = True
         self._video = None
+        self._live_video = None
         self._steps = {}
 
     @property
