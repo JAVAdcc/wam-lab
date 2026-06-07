@@ -1,0 +1,38 @@
+# FastWAM + LIBERO native MuJoCo/robosuite viewer.
+# This opens the real robosuite onscreen viewer in an X11 display. Use
+# scripts/start_mujoco_viewer_display.sh and noVNC port forwarding to interact
+# with the viewer window.
+server:
+  url: "ws://localhost:8000"
+  timeout: 300
+
+
+output_dir: "./results/fastwam_libero_native_viewer"
+
+benchmarks:
+  - benchmark: "vla_eval.benchmarks.libero.benchmark:LIBEROBenchmark"
+    name: "libero_fastwam_native_viewer"
+    mode: realtime
+    hz: 5.0
+    wait_first_action: true
+    paced: true
+    episodes_per_task: 1
+    max_tasks: 1
+    max_steps: 120
+    params:
+      suite: libero_spatial
+      seed: 7
+      env_seed: 0
+      num_steps_wait: 30
+      send_wrist_image: true
+      send_state: true
+      send_raw_libero_obs: true
+      send_privileged_3d: false
+      native_renderer: true
+      render_camera: agentview
+      native_viewer_reset_hold_sec: 30.0
+      native_viewer_end_hold_sec: 10.0
+    recording:
+      record_video: true
+      record_step: true
+      video_fps: 10

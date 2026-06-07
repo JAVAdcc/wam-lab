@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
+import pytest
 
+import vla_eval.benchmarks.libero.benchmark as libero_benchmark
 from vla_eval.benchmarks.libero.benchmark import LIBEROBenchmark
 from vla_eval.contracts import InterfaceContract, check_contracts, contract_from_endpoint, merge_observation_params
 from vla_eval.model_servers.fastwam import FastWAMLiberoServer
@@ -80,6 +83,34 @@ def test_record_sparse_3d_does_not_send_privileged_payload_by_default():
     assert benchmark.pointcloud_stride == 16
     assert "raw_libero_obs" in obs
     assert "privileged_3d" not in obs
+
+
+def test_libero_gl_backend_selection_blocks_same_process_mixing(tmp_path, monkeypatch):
+    monkeypatch.setattr(libero_benchmark, "_LIBERO_GL_BACKEND", None)
+    monkeypatch.setenv("WAM_LAB_EGL_VENDOR_FILE", str(tmp_path / "egl" / "nvidia_icd.json"))
+    monkeypatch.setenv("MUJOCO_GL", "egl")
+    monkeypatch.setenv("PYOPENGL_PLATFORM", "egl")
+    monkeypatch.setenv("EGL_PLATFORM", "device")
+
+    libero_benchmark._select_libero_gl_backend(native_renderer=True)
+
+    assert os.environ["MUJOCO_GL"] == "glfw"
+    assert "PYOPENGL_PLATFORM" not in os.environ
+    assert "EGL_PLATFORM" not in os.environ
+    with pytest.raises(RuntimeError, match="Cannot mix LIBERO MuJoCo GL backends"):
+        libero_benchmark._select_libero_gl_backend(native_renderer=False)
+
+
+def test_native_viewer_render_failure_is_fatal_by_default():
+    class BrokenViewer:
+        def render(self):
+            raise ValueError("viewer broken")
+
+    benchmark = LIBEROBenchmark(native_renderer=True)
+    benchmark._env = BrokenViewer()
+
+    with pytest.raises(RuntimeError, match="Native MuJoCo viewer render failed"):
+        benchmark._render_native_viewer()
 
 
 def test_contract_report_marks_payload_check_skipped_when_no_payload_keys_are_available():

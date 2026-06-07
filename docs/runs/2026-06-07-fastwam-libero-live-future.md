@@ -3,7 +3,8 @@
 ## Objective
 
 Validate FastWAM + LIBERO beyond the first smoke test, add a direct live
-simulation viewing path, and make future-video comparison reproducible.
+simulation viewing path, make future-video comparison reproducible, and expose
+LIBERO through a native MuJoCo/robosuite viewer for interactive inspection.
 
 ## Assumptions
 
@@ -25,6 +26,18 @@ simulation viewing path, and make future-video comparison reproducible.
 - Added `scripts/make_fastwam_future_video_report.py`.
 - Added `configs/benchmarks/libero/fastwam_spatial_1trial.yaml`.
 - Added recorder unit coverage for live-video sink without mp4 recording.
+- Added `LIBEROBenchmark(native_renderer=true)` support using
+  `ControlEnv(has_renderer=True, has_offscreen_renderer=True)`.
+- Added a strict native render check so viewer render failures fail the
+  diagnostic benchmark instead of being hidden behind policy success.
+- Added an in-process GL backend guard: LIBERO native GLFW and headless EGL
+  modes must run in separate Python processes.
+- Added a workspace-local native viewer display stack:
+  `scripts/setup_mujoco_viewer_stack.sh`,
+  `scripts/start_mujoco_viewer_display.sh`, and
+  `scripts/run_fastwam_libero_native_viewer.sh`.
+- Added `configs/benchmarks/libero/fastwam_native_viewer.yaml` with post-reset
+  and terminal holds for manual camera inspection.
 
 ## Validations
 
@@ -51,15 +64,40 @@ simulation viewing path, and make future-video comparison reproducible.
   - Output:
     `~/workspace/code/wam-lab/results/fastwam_libero_spatial_1trial_20260607_153500`
   - Result: 10/10 tasks success, 10 mp4s, 10 jsonl files, aggregate written.
+- Native MuJoCo viewer run:
+  - Output:
+    `~/workspace/code/wam-lab/results/fastwam_libero_native_viewer_20260607_162649`
+  - Result: `1/1 success`, 86 steps. The 10s terminal hold intentionally
+    appears as a long `env.step` in timing logs.
+  - VNC screenshot captured during the post-reset hold:
+    `/tmp/yiming/wam_lab_fastwam_native_viewer_20260607_162649/native_viewer_post_reset_strict.png`.
+  - Local copy:
+    `/Users/javadcc/code/ssh/H200/artifacts/port26_fastwam_native_viewer/native_viewer_post_reset_strict.png`.
+  - The screenshot shows the robosuite/MuJoCo onscreen window titled
+    `offscreen render` with the full LIBERO tabletop scene.
+- Native viewer display stack:
+  - `scripts/setup_mujoco_viewer_stack.sh` validated Xvfb, x11vnc, fluxbox, and
+    proot runtime dependencies under `~/workspace/tools/mujoco-viewer-stack`.
+  - `scripts/start_mujoco_viewer_display.sh stop/start/status` verified clean
+    service state: no stale Xvfb/proot processes after stop and expected
+    `5901`/`6080` listeners after start.
+- Config validation after native viewer additions: `161/161 configs valid`.
 
 ## Known Debt
 
-- Browser live view streams the fixed `agentview` RGB camera. It is direct
-  simulation rendering, but not an interactive native MuJoCo viewer with
-  draggable camera.
-- Native interactive MuJoCo viewer requires a remote graphical stack. On port 26,
-  `Xvfb`, `x11vnc`, `websockify`, and `vglrun` were not available, and `DISPLAY`
-  was unset.
+- Browser live view streams the fixed `agentview` RGB camera. Use the native
+  viewer path when draggable MuJoCo camera interaction is needed.
+- The native viewer path uses Xvfb+x11vnc+noVNC through workspace-local
+  packages and `proot`. This is suitable for debugging and visual inspection,
+  but not optimized for benchmark throughput or GPU-accelerated desktop
+  rendering.
+- Automated VNC screenshot capture is verified. Automated mouse-drag evidence
+  was not clean: the after-drag capture landed on the empty desktop after the
+  window closed. Manual noVNC interaction remains the intended validation path
+  for camera manipulation.
+- The viewer is LIBERO/robosuite's onscreen render window via
+  `ControlEnv(has_renderer=True)`. It should not be described as using the
+  newer standalone `mujoco.viewer` API.
 - Future-video integration is currently a WAM-Lab wrapper around FastWAM's
   official eval script, not yet surfaced through the WAM-Lab policy server API.
 - The spatial sweep is not the full official LIBERO evaluation protocol.

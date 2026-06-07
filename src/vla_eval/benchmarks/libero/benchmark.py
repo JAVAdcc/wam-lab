@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import functools
+import logging
+import time
 from pathlib import Path
 from contextlib import contextmanager
 from typing import Any
@@ -32,6 +34,9 @@ from vla_eval.types import Action, EpisodeResult, Observation, Task
 _DEFAULT_WORKSPACE_ROOT = Path(os.environ.get("WAM_LAB_WORKSPACE_ROOT", Path.home() / "workspace")).expanduser()
 os.environ.setdefault("MUJOCO_GL", "egl")
 
+logger = logging.getLogger(__name__)
+_LIBERO_GL_BACKEND: str | None = None
+
 
 def _bootstrap_headless_rendering() -> None:
     """Prepare user-space EGL config lazily before robosuite imports."""
@@ -50,6 +55,32 @@ def _bootstrap_headless_rendering() -> None:
         os.environ["__EGL_VENDOR_LIBRARY_FILENAMES"] = str(egl_vendor_file)
     os.environ.setdefault("EGL_PLATFORM", "device")
     os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+
+
+def _select_libero_gl_backend(native_renderer: bool) -> None:
+    """Select the MuJoCo GL backend before LIBERO/robosuite imports.
+
+    MuJoCo / PyOpenGL backend selection is process-global after import. Running
+    native GLFW rendering and headless EGL rendering in one Python process is
+    therefore intentionally rejected instead of silently contaminating the next
+    benchmark.
+    """
+    global _LIBERO_GL_BACKEND
+    target = "glfw" if native_renderer else "egl"
+    if _LIBERO_GL_BACKEND is not None and _LIBERO_GL_BACKEND != target:
+        raise RuntimeError(
+            "Cannot mix LIBERO MuJoCo GL backends in one process: "
+            f"already initialized {_LIBERO_GL_BACKEND!r}, requested {target!r}. "
+            "Run native-viewer and headless/offscreen LIBERO benchmarks in separate processes."
+        )
+    if native_renderer:
+        os.environ["MUJOCO_GL"] = "glfw"
+        os.environ.pop("PYOPENGL_PLATFORM", None)
+        os.environ.pop("EGL_PLATFORM", None)
+    else:
+        os.environ["MUJOCO_GL"] = "egl"
+        _bootstrap_headless_rendering()
+    _LIBERO_GL_BACKEND = target
 
 
 def _ensure_libero_config() -> None:
@@ -158,6 +189,20 @@ class LIBEROBenchmark(StepBenchmark):
             When None, uses ``MAX_STEP_MAPPING[suite]``.
         env_seed: Seed for ``env.seed()``.  When None, defaults to ``seed``.
             OpenVLA reference uses ``env_seed=0`` separately from ``seed=7``.
+        native_renderer: Create a robosuite onscreen viewer
+            (``has_renderer=True``) in addition to camera observations.
+            Requires a valid X11/GLFW display and is intended for interactive
+            diagnostics, not headless benchmark throughput.
+        render_camera: Robosuite viewer camera used when ``native_renderer`` is
+            enabled.
+        native_render_strict: Raise if the onscreen viewer cannot be rendered.
+            Keep this enabled for diagnostic native-viewer runs so policy
+            success cannot hide a broken viewer.
+        native_viewer_reset_hold_sec: Pause after the first post-reset native
+            viewer render. This gives a human time to focus the viewer and
+            adjust the camera before policy actions start.
+        native_viewer_end_hold_sec: Pause after a successful/terminal step so
+            the final scene can be inspected before the episode closes.
     """
 
     _ALL_RECORD_FIELDS = frozenset({"reward", "done", "success", "privileged_3d_summary", "sparse_3d"})
@@ -182,6 +227,11 @@ class LIBEROBenchmark(StepBenchmark):
         record_sparse_3d: bool = False,
         sparse_pointcloud_voxel_size: float | None = 0.02,
         sparse_pointcloud_max_points: int | None = 2048,
+        native_renderer: bool = False,
+        render_camera: str = "agentview",
+        native_render_strict: bool = True,
+        native_viewer_reset_hold_sec: float = 0.0,
+        native_viewer_end_hold_sec: float = 0.0,
     ) -> None:
         super().__init__()
         self.suite = suite
@@ -203,6 +253,11 @@ class LIBEROBenchmark(StepBenchmark):
         self.camera_segmentations = camera_segmentations
         self.pointcloud_stride = 16 if record_sparse_3d and pointcloud_stride is None else pointcloud_stride
         self.record_privileged_summary = record_privileged_summary
+        self.native_renderer = bool(native_renderer)
+        self.render_camera = str(render_camera)
+        self.native_render_strict = bool(native_render_strict)
+        self.native_viewer_reset_hold_sec = max(0.0, float(native_viewer_reset_hold_sec))
+        self.native_viewer_end_hold_sec = max(0.0, float(native_viewer_end_hold_sec))
         self._sparse_scene_config = SparseSceneConfig(
             voxel_size=sparse_pointcloud_voxel_size,
             max_points=sparse_pointcloud_max_points,
@@ -210,6 +265,7 @@ class LIBEROBenchmark(StepBenchmark):
         self._env = None
         self._task_suite = None
         self._current_task_id: int | None = None
+        self._native_render_warned = False
 
     def cleanup(self) -> None:
         if self._env is not None:
@@ -223,7 +279,7 @@ class LIBEROBenchmark(StepBenchmark):
         """Lazily initialize LIBERO (heavy imports)."""
         if self._task_suite is not None:
             return
-        _bootstrap_headless_rendering()
+        _select_libero_gl_backend(self.native_renderer)
         _ensure_libero_config()
 
         from libero.libero import benchmark
@@ -251,7 +307,7 @@ class LIBEROBenchmark(StepBenchmark):
         from pathlib import Path
 
         from libero.libero import get_libero_path
-        from libero.libero.envs import OffScreenRenderEnv
+        from libero.libero.envs.env_wrapper import ControlEnv, OffScreenRenderEnv
 
         task_obj = task["task_obj"]
         task_id = task["task_id"]
@@ -270,7 +326,18 @@ class LIBEROBenchmark(StepBenchmark):
                 "camera_depths": self.camera_depths,
                 "camera_segmentations": self.camera_segmentations,
             }
-            env = OffScreenRenderEnv(**env_args)
+            if self.native_renderer:
+                env_args.update(
+                    {
+                        "has_renderer": True,
+                        "has_offscreen_renderer": True,
+                        "render_camera": self.render_camera,
+                        "use_camera_obs": True,
+                    }
+                )
+                env = ControlEnv(**env_args)
+            else:
+                env = OffScreenRenderEnv(**env_args)
             env.seed(self.env_seed)
             self._env = env
             self._current_task_id = task_id
@@ -287,6 +354,7 @@ class LIBEROBenchmark(StepBenchmark):
         # Run dummy action wait steps (always in delta mode to avoid slamming to origin)
         for _ in range(self.num_steps_wait):
             obs, _, _, _ = self._env.step(LIBERO_DUMMY_ACTION)
+            self._render_native_viewer()
 
         # Switch to absolute action mode after settling (e.g. for X-VLA)
         if self.absolute_action:
@@ -294,6 +362,8 @@ class LIBEROBenchmark(StepBenchmark):
                 robot.controller.use_delta = False
 
         self._recorder.record_video(self._extract_frame(obs))
+        self._render_native_viewer()
+        self._hold_native_viewer(self.native_viewer_reset_hold_sec, "post-reset")
         return obs
 
     def step(self, action: Action) -> StepResult:
@@ -311,6 +381,7 @@ class LIBEROBenchmark(StepBenchmark):
 
         assert self._env is not None
         obs, reward, done, info = self._env.step(processed_action)
+        self._render_native_viewer()
         self._recorder.record_video(self._extract_frame(obs))
         record_fields: dict[str, Any] = {"reward": float(reward), "done": bool(done), "success": bool(done)}
         if self.record_privileged_summary and self._enable_privileged_3d:
@@ -321,7 +392,42 @@ class LIBEROBenchmark(StepBenchmark):
                 self._sparse_scene_config,
             )
         self._recorder.record_step(**record_fields)
+        if done:
+            self._hold_native_viewer(self.native_viewer_end_hold_sec, "terminal")
         return StepResult(obs=obs, reward=reward, done=done, info=info)
+
+    def _render_native_viewer(self) -> None:
+        if not self.native_renderer or self._env is None:
+            return
+        try:
+            render_fn = getattr(self._env, "render", None)
+            if render_fn is not None:
+                render_fn()
+                return
+            inner = getattr(self._env, "env", None)
+            inner_render_fn = getattr(inner, "render", None)
+            if inner_render_fn is not None:
+                inner_render_fn()
+                return
+            raise RuntimeError("Native renderer is enabled, but LIBERO env exposes no render() method")
+        except Exception as exc:
+            if self.native_render_strict:
+                raise RuntimeError("Native MuJoCo viewer render failed") from exc
+            if not self._native_render_warned:
+                logger.exception("Native MuJoCo viewer render failed; continuing benchmark without viewer updates")
+                self._native_render_warned = True
+
+    def _hold_native_viewer(self, seconds: float, phase: str) -> None:
+        if not self.native_renderer or seconds <= 0:
+            return
+        deadline = time.monotonic() + seconds
+        logger.info("Holding native MuJoCo viewer for %.1fs at %s", seconds, phase)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            self._render_native_viewer()
+            time.sleep(min(0.25, remaining))
 
     @staticmethod
     def _extract_frame(raw_obs: Any) -> np.ndarray | None:
@@ -551,6 +657,13 @@ class LIBEROBenchmark(StepBenchmark):
     def render(self) -> np.ndarray | None:
         try:
             assert self._env is not None
-            return self._env.render()
+            render_fn = getattr(self._env, "render", None)
+            if render_fn is not None:
+                return render_fn()
+            inner = getattr(self._env, "env", None)
+            inner_render_fn = getattr(inner, "render", None)
+            if inner_render_fn is not None:
+                return inner_render_fn()
+            return None
         except Exception:
             return None

@@ -38,9 +38,77 @@ Notes:
 - The live config uses paced realtime mode at 5 Hz for human inspection. The
   normal action-only sweep remains sync mode for fast evaluation.
 - A fully interactive native MuJoCo viewer with draggable camera is a different
-  path. It requires a remote graphical session such as X11/noVNC/VirtualGL and
-  a LIBERO environment created with `has_renderer=True`. The current port-26
-  host did not have Xvfb/noVNC/x11vnc/vglrun available during this validation.
+  path; see the next section.
+
+## Native MuJoCo Viewer
+
+Use this when you need LIBERO's robosuite/MuJoCo onscreen viewer, including
+mouse camera interaction through VNC/noVNC. This uses robosuite
+`ControlEnv(has_renderer=True)` rather than the fixed WAM-Lab RGB stream or a
+sparse point-cloud view.
+
+Prepare the noVNC/X11 stack once on the port-26 host:
+
+```bash
+cd ~/workspace/code/wam-lab
+scripts/setup_mujoco_viewer_stack.sh
+```
+
+Start the remote display:
+
+```bash
+cd ~/workspace/code/wam-lab
+scripts/start_mujoco_viewer_display.sh start
+```
+
+Forward noVNC from your local machine:
+
+```bash
+ssh -N -L 127.0.0.1:7861:127.0.0.1:6080 -p 26 yiming@47.116.73.163
+```
+
+Open:
+
+```text
+http://127.0.0.1:7861/vnc.html?host=127.0.0.1&port=7861&autoconnect=1&resize=scale
+```
+
+Run FastWAM + LIBERO with the native viewer enabled:
+
+```bash
+cd ~/workspace/code/wam-lab
+CUDA_VISIBLE_DEVICES=0 scripts/run_fastwam_libero_native_viewer.sh
+```
+
+Notes:
+
+- The benchmark config is `configs/benchmarks/libero/fastwam_native_viewer.yaml`.
+- `LIBEROBenchmark(native_renderer=true)` creates LIBERO through
+  `ControlEnv(has_renderer=True, has_offscreen_renderer=True)`, so the policy
+  still receives camera observations while the MuJoCo viewer window is shown.
+- Native viewer rendering is strict by default: if the onscreen render call
+  fails, the benchmark fails instead of reporting policy success with a broken
+  viewer.
+- Native GLFW and headless EGL LIBERO modes are intentionally not mixed inside
+  one Python process. Run native-viewer and headless/offscreen sweeps as
+  separate commands.
+- The benchmark process runs with `DISPLAY=:99` and `MUJOCO_GL=glfw`.
+- The default native config pauses for 30 seconds after the first post-reset
+  onscreen render and 10 seconds at the terminal scene. This is deliberate: it
+  gives you time to focus the noVNC window and drag/zoom the MuJoCo camera
+  before and after the policy rollout. Adjust
+  `native_viewer_reset_hold_sec` / `native_viewer_end_hold_sec` in the config
+  for longer manual inspection.
+- The display stack is installed under `~/workspace/tools/mujoco-viewer-stack`;
+  no sudo is required. The Ubuntu Xvfb package expects `/usr/bin/xkbcomp`, so
+  `start_mujoco_viewer_display.sh` uses `proot` to expose the workspace copy of
+  `xkbcomp` and XKB data at the paths Xvfb expects.
+- Stop the display with:
+
+```bash
+cd ~/workspace/code/wam-lab
+scripts/start_mujoco_viewer_display.sh stop
+```
 
 ## Future Video Comparison
 
