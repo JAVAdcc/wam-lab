@@ -13,6 +13,42 @@ LOG_DIR="${LOG_DIR:-${WORKSPACE_ROOT}/logs/mujoco_viewer_display_${DISPLAY_NUM}_
 PID_FILE="${PID_FILE:-${LOG_DIR}/pids}"
 RUN_USER="${USER:-$(id -un)}"
 
+print_novnc_forward_hint() {
+  local ssh_port="${SSH_PORT_HINT:-}"
+  local ssh_host="${SSH_HOST_HINT:-47.116.73.163}"
+  local ssh_user="${SSH_USER_HINT:-${USER:-yiming}}"
+  local local_port="${LOCAL_NOVNC_PORT:-7861}"
+
+  if [[ -z "$ssh_port" && -n "${SSH_CONNECTION:-}" ]]; then
+    local client_ip client_port server_ip server_port
+    read -r client_ip client_port server_ip server_port <<< "${SSH_CONNECTION}"
+    ssh_port="$server_port"
+  fi
+  ssh_port="${ssh_port:-22}"
+
+  echo "Forward from local:"
+  echo "  ssh -N -L 127.0.0.1:${local_port}:127.0.0.1:${NOVNC_PORT} -p ${ssh_port} ${ssh_user}@${ssh_host}"
+  echo "Open:"
+  echo "  http://127.0.0.1:${local_port}/vnc.html?host=127.0.0.1&port=${local_port}&autoconnect=1&resize=scale"
+}
+
+tcp_port_open() {
+  local port="$1"
+  "$PYTHON_BIN" - "$port" <<'PY' >/dev/null 2>&1
+import socket
+import sys
+
+sock = socket.socket()
+sock.settimeout(0.5)
+try:
+    sock.connect(("127.0.0.1", int(sys.argv[1])))
+except OSError:
+    sys.exit(1)
+finally:
+    sock.close()
+PY
+}
+
 LIB_PATH="${STACK_ROOT}/lib/x86_64-linux-gnu:${STACK_ROOT}/usr/lib/x86_64-linux-gnu:${STACK_ROOT}/usr/lib:${LD_LIBRARY_PATH:-}"
 export LD_LIBRARY_PATH="$LIB_PATH"
 export PATH="${STACK_ROOT}/usr/bin:${PATH}"
@@ -36,12 +72,24 @@ stop_display() {
 status_display() {
   echo "DISPLAY=:${DISPLAY_NUM}"
   echo "noVNC=http://127.0.0.1:${NOVNC_PORT}/vnc.html"
+  if tcp_port_open "$VNC_PORT"; then
+    echo "vnc_port_open=yes"
+  else
+    echo "vnc_port_open=no"
+  fi
+  if tcp_port_open "$NOVNC_PORT"; then
+    echo "novnc_port_open=yes"
+  else
+    echo "novnc_port_open=no"
+  fi
   if [[ -f "$PID_FILE" ]]; then
     echo "pids=$(tr '\n' ' ' < "$PID_FILE")"
   else
     echo "pids="
   fi
-  ss -ltnp 2>/dev/null | grep -E ":(${VNC_PORT}|${NOVNC_PORT})" || true
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltnp 2>/dev/null | grep -E ":(${VNC_PORT}|${NOVNC_PORT})" || true
+  fi
 }
 
 case "$ACTION" in
@@ -68,12 +116,12 @@ for bin in "$STACK_ROOT/usr/bin/Xvfb" "$STACK_ROOT/usr/bin/x11vnc" "$STACK_ROOT/
   }
 done
 
-if ss -ltn 2>/dev/null | grep -q ":${VNC_PORT} "; then
+if tcp_port_open "$VNC_PORT"; then
   echo "VNC port ${VNC_PORT} is already in use."
   status_display
   exit 1
 fi
-if ss -ltn 2>/dev/null | grep -q ":${NOVNC_PORT} "; then
+if tcp_port_open "$NOVNC_PORT"; then
   echo "noVNC port ${NOVNC_PORT} is already in use."
   status_display
   exit 1
@@ -120,8 +168,5 @@ curl -fsS "http://127.0.0.1:${NOVNC_PORT}/vnc.html" >/dev/null
 
 echo "MuJoCo viewer display ready."
 echo "Remote DISPLAY=:${DISPLAY_NUM}"
-echo "Forward from local:"
-echo "  ssh -N -L 127.0.0.1:7861:127.0.0.1:${NOVNC_PORT} -p 26 yiming@47.116.73.163"
-echo "Open:"
-echo "  http://127.0.0.1:7861/vnc.html?host=127.0.0.1&port=7861&autoconnect=1&resize=scale"
+print_novnc_forward_hint
 echo "Logs: ${LOG_DIR}"

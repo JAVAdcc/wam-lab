@@ -11,14 +11,14 @@ controlling during inference.
 On your local machine:
 
 ```bash
-ssh -N -L 127.0.0.1:7860:127.0.0.1:8765 -p 26 yiming@47.116.73.163
+ssh -N -L 127.0.0.1:7860:127.0.0.1:8765 -p 22 yiming@47.116.73.163
 ```
 
-On the port-26 host:
+On the target host:
 
 ```bash
 cd ~/workspace/code/wam-lab
-CUDA_VISIBLE_DEVICES=0 scripts/run_fastwam_libero_live_sim.sh
+CUDA_VISIBLE_DEVICES=7 SSH_PORT_HINT=22 scripts/run_fastwam_libero_live_sim.sh
 ```
 
 Then open:
@@ -37,6 +37,8 @@ Notes:
   latest episode mp4 remains under the configured result directory.
 - The live config uses paced realtime mode at 5 Hz for human inspection. The
   normal action-only sweep remains sync mode for fast evaluation.
+- The helper script uses a Python socket probe for localhost port checks, so it
+  works on minimal containers that do not provide `ss`.
 - A fully interactive native MuJoCo viewer with draggable camera is a different
   path; see the next section.
 
@@ -49,7 +51,7 @@ rollout. This is different from robosuite's OpenCV `offscreen render` window,
 which only displays a fixed camera image and does not handle mouse camera
 dragging.
 
-Prepare the noVNC/X11 stack once on the port-26 host:
+Prepare the noVNC/X11 stack once on the target host:
 
 ```bash
 cd ~/workspace/code/wam-lab
@@ -66,7 +68,7 @@ scripts/start_mujoco_viewer_display.sh start
 Forward noVNC from your local machine:
 
 ```bash
-ssh -N -L 127.0.0.1:7861:127.0.0.1:6080 -p 26 yiming@47.116.73.163
+ssh -N -L 127.0.0.1:7861:127.0.0.1:6080 -p 22 yiming@47.116.73.163
 ```
 
 Open:
@@ -79,7 +81,7 @@ Run FastWAM + LIBERO with the native viewer enabled:
 
 ```bash
 cd ~/workspace/code/wam-lab
-CUDA_VISIBLE_DEVICES=0 scripts/run_fastwam_libero_native_viewer.sh
+CUDA_VISIBLE_DEVICES=7 SSH_PORT_HINT=22 scripts/run_fastwam_libero_native_viewer.sh
 ```
 
 Notes:
@@ -97,6 +99,10 @@ Notes:
   one Python process. Run native-viewer and headless/offscreen sweeps as
   separate commands.
 - The benchmark process runs with `DISPLAY=:99` and `MUJOCO_GL=glfw`.
+- The helper scripts infer the SSH port from `SSH_CONNECTION` when possible.
+  Set `SSH_PORT_HINT`, `SSH_HOST_HINT`, `SSH_USER_HINT`, or
+  `LOCAL_NOVNC_PORT` when the printed noVNC forwarding command needs to match a
+  different tunnel or local port.
 - The default native config pauses for 30 seconds after the first post-reset
   onscreen render and 10 seconds at the terminal scene. This is deliberate: it
   gives you time to focus the noVNC window and drag/zoom the MuJoCo camera
@@ -121,7 +127,7 @@ actual rollout observations.
 
 ```bash
 cd ~/workspace/code/wam-lab
-CUDA_VISIBLE_DEVICES=0 scripts/run_fastwam_libero_future_video.sh
+GPU_ID=7 scripts/run_fastwam_libero_future_video.sh
 ```
 
 The script wraps FastWAM's official `experiments/libero/eval_libero_single.py`

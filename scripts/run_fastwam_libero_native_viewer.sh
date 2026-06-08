@@ -20,9 +20,45 @@ RUN_USER="${USER:-$(id -un)}"
 LOG_DIR="${LOG_DIR:-/tmp/${RUN_USER}/wam_lab_fastwam_native_viewer_$(date +%Y%m%d_%H%M%S)}"
 mkdir -p "$LOG_DIR" "$OUTPUT_DIR"
 
+print_novnc_forward_hint() {
+  local ssh_port="${SSH_PORT_HINT:-}"
+  local ssh_host="${SSH_HOST_HINT:-47.116.73.163}"
+  local ssh_user="${SSH_USER_HINT:-${USER:-yiming}}"
+  local local_port="${LOCAL_NOVNC_PORT:-7861}"
+
+  if [[ -z "$ssh_port" && -n "${SSH_CONNECTION:-}" ]]; then
+    local client_ip client_port server_ip server_port
+    read -r client_ip client_port server_ip server_port <<< "${SSH_CONNECTION}"
+    ssh_port="$server_port"
+  fi
+  ssh_port="${ssh_port:-22}"
+
+  echo "Forward noVNC from local:"
+  echo "  ssh -N -L 127.0.0.1:${local_port}:127.0.0.1:${NOVNC_PORT} -p ${ssh_port} ${ssh_user}@${ssh_host}"
+  echo "Open:"
+  echo "  http://127.0.0.1:${local_port}/vnc.html?host=127.0.0.1&port=${local_port}&autoconnect=1&resize=scale"
+}
+
+tcp_port_open() {
+  local port="$1"
+  "$PYTHON_BIN" - "$port" <<'PY' >/dev/null 2>&1
+import socket
+import sys
+
+sock = socket.socket()
+sock.settimeout(0.5)
+try:
+    sock.connect(("127.0.0.1", int(sys.argv[1])))
+except OSError:
+    sys.exit(1)
+finally:
+    sock.close()
+PY
+}
+
 cd "$WAM_LAB_ROOT"
 
-if ! ss -ltn 2>/dev/null | grep -q ":${NOVNC_PORT} "; then
+if ! tcp_port_open "$NOVNC_PORT"; then
   scripts/start_mujoco_viewer_display.sh start
 fi
 
@@ -35,7 +71,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if ss -ltn 2>/dev/null | grep -q ":${SERVER_PORT} "; then
+if tcp_port_open "$SERVER_PORT"; then
   echo "Port ${SERVER_PORT} is already in use; stop the existing model server or set SERVER_PORT."
   exit 1
 fi
@@ -66,10 +102,7 @@ while true; do
 done
 
 echo "FastWAM server ready."
-echo "Forward noVNC from local:"
-echo "  ssh -N -L 127.0.0.1:7861:127.0.0.1:${NOVNC_PORT} -p 26 yiming@47.116.73.163"
-echo "Open:"
-echo "  http://127.0.0.1:7861/vnc.html?host=127.0.0.1&port=7861&autoconnect=1&resize=scale"
+print_novnc_forward_hint
 echo "Starting native-viewer rollout in ${PREVIEW_DELAY_SEC}s; benchmark log=${LOG_DIR}/run.log"
 echo "The benchmark will also hold after reset so the MuJoCo viewer is visible before actions start."
 sleep "$PREVIEW_DELAY_SEC"

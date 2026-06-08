@@ -19,6 +19,42 @@ RUN_USER="${USER:-$(id -un)}"
 LOG_DIR="${LOG_DIR:-/tmp/${RUN_USER}/wam_lab_fastwam_live_sim_$(date +%Y%m%d_%H%M%S)}"
 mkdir -p "$LOG_DIR" "$OUTPUT_DIR"
 
+print_live_forward_hint() {
+  local ssh_port="${SSH_PORT_HINT:-}"
+  local ssh_host="${SSH_HOST_HINT:-47.116.73.163}"
+  local ssh_user="${SSH_USER_HINT:-${USER:-yiming}}"
+  local local_port="${LOCAL_LIVE_PORT:-7860}"
+
+  if [[ -z "$ssh_port" && -n "${SSH_CONNECTION:-}" ]]; then
+    local client_ip client_port server_ip server_port
+    read -r client_ip client_port server_ip server_port <<< "${SSH_CONNECTION}"
+    ssh_port="$server_port"
+  fi
+  ssh_port="${ssh_port:-22}"
+
+  echo "Forward this from your local machine if it is not already forwarded:"
+  echo "  ssh -N -L 127.0.0.1:${local_port}:127.0.0.1:${LIVE_PORT} -p ${ssh_port} ${ssh_user}@${ssh_host}"
+  echo "Then open:"
+  echo "  http://127.0.0.1:${local_port}/"
+}
+
+tcp_port_open() {
+  local port="$1"
+  "$PYTHON_BIN" - "$port" <<'PY' >/dev/null 2>&1
+import socket
+import sys
+
+sock = socket.socket()
+sock.settimeout(0.5)
+try:
+    sock.connect(("127.0.0.1", int(sys.argv[1])))
+except OSError:
+    sys.exit(1)
+finally:
+    sock.close()
+PY
+}
+
 cd "$WAM_LAB_ROOT"
 
 server_pid=""
@@ -30,11 +66,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if ss -ltn 2>/dev/null | grep -q ":${SERVER_PORT} "; then
+if tcp_port_open "$SERVER_PORT"; then
   echo "Port ${SERVER_PORT} is already in use; stop the existing model server or set SERVER_PORT."
   exit 1
 fi
-if ss -ltn 2>/dev/null | grep -q ":${LIVE_PORT} "; then
+if tcp_port_open "$LIVE_PORT"; then
   echo "Port ${LIVE_PORT} is already in use; stop the existing live viewer or set LIVE_PORT and update the config."
   exit 1
 fi
@@ -65,10 +101,7 @@ while true; do
 done
 
 echo "FastWAM server ready."
-echo "Forward this from your local machine if it is not already forwarded:"
-echo "  ssh -N -L 127.0.0.1:7860:127.0.0.1:${LIVE_PORT} -p 26 yiming@47.116.73.163"
-echo "Then open:"
-echo "  http://127.0.0.1:7860/"
+print_live_forward_hint
 echo "Starting rollout in ${PREVIEW_DELAY_SEC}s; benchmark log=${LOG_DIR}/run.log"
 sleep "$PREVIEW_DELAY_SEC"
 

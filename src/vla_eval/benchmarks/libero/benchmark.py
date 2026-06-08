@@ -38,10 +38,8 @@ logger = logging.getLogger(__name__)
 _LIBERO_GL_BACKEND: str | None = None
 
 
-def _bootstrap_headless_rendering() -> None:
-    """Prepare user-space EGL config lazily before robosuite imports."""
-    if os.environ.get("MUJOCO_GL") != "egl":
-        return
+def _ensure_egl_vendor_file() -> None:
+    """Point PyOpenGL/MuJoCo EGL at the user-space NVIDIA ICD file."""
     egl_vendor_file = Path(
         os.environ.get("WAM_LAB_EGL_VENDOR_FILE", str(_DEFAULT_WORKSPACE_ROOT / ".egl" / "nvidia_icd.json"))
     ).expanduser()
@@ -53,6 +51,13 @@ def _bootstrap_headless_rendering() -> None:
                 encoding="utf-8",
             )
         os.environ["__EGL_VENDOR_LIBRARY_FILENAMES"] = str(egl_vendor_file)
+
+
+def _bootstrap_headless_rendering() -> None:
+    """Prepare user-space EGL config lazily before robosuite imports."""
+    if os.environ.get("MUJOCO_GL") != "egl":
+        return
+    _ensure_egl_vendor_file()
     os.environ.setdefault("EGL_PLATFORM", "device")
     os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
 
@@ -75,6 +80,9 @@ def _select_libero_gl_backend(native_renderer: bool) -> None:
         )
     if native_renderer:
         os.environ["MUJOCO_GL"] = "glfw"
+        # LIBERO still creates an offscreen render context for policy camera
+        # observations, even when the interactive MuJoCo viewer uses GLFW.
+        _ensure_egl_vendor_file()
         os.environ.pop("PYOPENGL_PLATFORM", None)
         os.environ.pop("EGL_PLATFORM", None)
     else:

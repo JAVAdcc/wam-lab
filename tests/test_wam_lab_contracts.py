@@ -87,7 +87,9 @@ def test_record_sparse_3d_does_not_send_privileged_payload_by_default():
 
 def test_libero_gl_backend_selection_blocks_same_process_mixing(tmp_path, monkeypatch):
     monkeypatch.setattr(libero_benchmark, "_LIBERO_GL_BACKEND", None)
-    monkeypatch.setenv("WAM_LAB_EGL_VENDOR_FILE", str(tmp_path / "egl" / "nvidia_icd.json"))
+    egl_file = tmp_path / "egl" / "nvidia_icd.json"
+    monkeypatch.setenv("WAM_LAB_EGL_VENDOR_FILE", str(egl_file))
+    monkeypatch.delenv("__EGL_VENDOR_LIBRARY_FILENAMES", raising=False)
     monkeypatch.setenv("MUJOCO_GL", "egl")
     monkeypatch.setenv("PYOPENGL_PLATFORM", "egl")
     monkeypatch.setenv("EGL_PLATFORM", "device")
@@ -95,6 +97,8 @@ def test_libero_gl_backend_selection_blocks_same_process_mixing(tmp_path, monkey
     libero_benchmark._select_libero_gl_backend(native_renderer=True)
 
     assert os.environ["MUJOCO_GL"] == "glfw"
+    assert os.environ["__EGL_VENDOR_LIBRARY_FILENAMES"] == str(egl_file)
+    assert egl_file.exists()
     assert "PYOPENGL_PLATFORM" not in os.environ
     assert "EGL_PLATFORM" not in os.environ
     with pytest.raises(RuntimeError, match="Cannot mix LIBERO MuJoCo GL backends"):

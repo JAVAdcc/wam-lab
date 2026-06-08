@@ -16,6 +16,10 @@ PACKAGES=(
   x11-xkb-utils
   xkb-data
   proot
+  menu
+  libfribidi0
+  libfontenc1
+  libxkbfile1
   libtalloc2
   liblzo2-2
   libxfont2
@@ -24,7 +28,6 @@ PACKAGES=(
   libxdamage1
   libavahi-common3
   libavahi-client3
-  libimlib2
   libxpm4
   libxrandr2
   libxinerama1
@@ -32,9 +35,26 @@ PACKAGES=(
   libxft2
   libxext6
   libx11-6
+  libxxf86dga1
   libfreetype6
   libfontconfig1
 )
+
+add_first_available_package() {
+  local candidate
+  local pkg
+  for pkg in "$@"; do
+    candidate="$(apt-cache policy "$pkg" 2>/dev/null | awk '/Candidate:/ { print $2; exit }')"
+    if [[ -n "$candidate" && "$candidate" != "(none)" ]]; then
+      PACKAGES+=("$pkg")
+      return 0
+    fi
+  done
+  echo "No apt candidate found for any of: $*"
+  return 1
+}
+
+add_first_available_package libimlib2 libimlib2t64
 
 mkdir -p "$STACK_ROOT" "$APT_DIR"
 
