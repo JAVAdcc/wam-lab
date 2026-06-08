@@ -189,12 +189,16 @@ class LIBEROBenchmark(StepBenchmark):
             When None, uses ``MAX_STEP_MAPPING[suite]``.
         env_seed: Seed for ``env.seed()``.  When None, defaults to ``seed``.
             OpenVLA reference uses ``env_seed=0`` separately from ``seed=7``.
-        native_renderer: Create a robosuite onscreen viewer
-            (``has_renderer=True``) in addition to camera observations.
+        native_renderer: Create a native MuJoCo diagnostic viewer in addition
+            to camera observations.
             Requires a valid X11/GLFW display and is intended for interactive
             diagnostics, not headless benchmark throughput.
+        native_viewer_backend: Viewer implementation used when
+            ``native_renderer`` is enabled. ``mujoco_passive`` launches
+            ``mujoco.viewer.launch_passive`` with a free interactive camera;
+            ``opencv`` preserves robosuite's fixed-camera OpenCV renderer.
         render_camera: Robosuite viewer camera used when ``native_renderer`` is
-            enabled.
+            enabled with ``native_viewer_backend="opencv"``.
         native_render_strict: Raise if the onscreen viewer cannot be rendered.
             Keep this enabled for diagnostic native-viewer runs so policy
             success cannot hide a broken viewer.
@@ -228,6 +232,7 @@ class LIBEROBenchmark(StepBenchmark):
         sparse_pointcloud_voxel_size: float | None = 0.02,
         sparse_pointcloud_max_points: int | None = 2048,
         native_renderer: bool = False,
+        native_viewer_backend: str = "mujoco_passive",
         render_camera: str = "agentview",
         native_render_strict: bool = True,
         native_viewer_reset_hold_sec: float = 0.0,
@@ -254,6 +259,9 @@ class LIBEROBenchmark(StepBenchmark):
         self.pointcloud_stride = 16 if record_sparse_3d and pointcloud_stride is None else pointcloud_stride
         self.record_privileged_summary = record_privileged_summary
         self.native_renderer = bool(native_renderer)
+        if native_viewer_backend not in {"mujoco_passive", "opencv"}:
+            raise ValueError("native_viewer_backend must be one of: mujoco_passive, opencv")
+        self.native_viewer_backend = native_viewer_backend
         self.render_camera = str(render_camera)
         self.native_render_strict = bool(native_render_strict)
         self.native_viewer_reset_hold_sec = max(0.0, float(native_viewer_reset_hold_sec))
@@ -263,11 +271,13 @@ class LIBEROBenchmark(StepBenchmark):
             max_points=sparse_pointcloud_max_points,
         )
         self._env = None
+        self._native_viewer = None
         self._task_suite = None
         self._current_task_id: int | None = None
         self._native_render_warned = False
 
     def cleanup(self) -> None:
+        self._close_native_viewer()
         if self._env is not None:
             try:
                 self._env.close()
@@ -316,6 +326,7 @@ class LIBEROBenchmark(StepBenchmark):
         # Only create a new env when the task changes (reuse across episodes)
         if self._env is None or self._current_task_id != task_id:
             if self._env is not None:
+                self._close_native_viewer()
                 self._env.close()
 
             bddl_file = Path(get_libero_path("bddl_files")) / task_obj.problem_folder / task_obj.bddl_file
@@ -327,14 +338,23 @@ class LIBEROBenchmark(StepBenchmark):
                 "camera_segmentations": self.camera_segmentations,
             }
             if self.native_renderer:
-                env_args.update(
-                    {
-                        "has_renderer": True,
-                        "has_offscreen_renderer": True,
-                        "render_camera": self.render_camera,
-                        "use_camera_obs": True,
-                    }
-                )
+                if self.native_viewer_backend == "opencv":
+                    env_args.update(
+                        {
+                            "has_renderer": True,
+                            "has_offscreen_renderer": True,
+                            "render_camera": self.render_camera,
+                            "use_camera_obs": True,
+                        }
+                    )
+                else:
+                    env_args.update(
+                        {
+                            "has_renderer": False,
+                            "has_offscreen_renderer": True,
+                            "use_camera_obs": True,
+                        }
+                    )
                 env = ControlEnv(**env_args)
             else:
                 env = OffScreenRenderEnv(**env_args)
@@ -399,6 +419,9 @@ class LIBEROBenchmark(StepBenchmark):
     def _render_native_viewer(self) -> None:
         if not self.native_renderer or self._env is None:
             return
+        if self.native_viewer_backend == "mujoco_passive":
+            self._sync_mujoco_passive_viewer()
+            return
         try:
             render_fn = getattr(self._env, "render", None)
             if render_fn is not None:
@@ -416,6 +439,51 @@ class LIBEROBenchmark(StepBenchmark):
             if not self._native_render_warned:
                 logger.exception("Native MuJoCo viewer render failed; continuing benchmark without viewer updates")
                 self._native_render_warned = True
+
+    def _sync_mujoco_passive_viewer(self) -> None:
+        assert self._env is not None
+        try:
+            handle = self._native_viewer
+            if handle is None:
+                import mujoco
+                import mujoco.viewer
+
+                sim = self._env.sim
+                handle = mujoco.viewer.launch_passive(
+                    sim.model._model,
+                    sim.data._data,
+                    show_left_ui=True,
+                    show_right_ui=True,
+                )
+                handle.cam.type = mujoco.mjtCamera.mjCAMERA_FREE
+                handle.cam.fixedcamid = -1
+                self._configure_passive_viewer_camera(handle.cam)
+                self._native_viewer = handle
+            if not handle.is_running():
+                raise RuntimeError("MuJoCo passive viewer is not running")
+            handle.sync()
+        except Exception as exc:
+            if self.native_render_strict:
+                raise RuntimeError("Native MuJoCo passive viewer sync failed") from exc
+            if not self._native_render_warned:
+                logger.exception("Native MuJoCo passive viewer sync failed; continuing benchmark without viewer updates")
+                self._native_render_warned = True
+
+    @staticmethod
+    def _configure_passive_viewer_camera(cam: Any) -> None:
+        cam.lookat[:] = np.array([0.0, 0.0, 0.75], dtype=np.float64)
+        cam.distance = 2.0
+        cam.azimuth = 90.0
+        cam.elevation = -35.0
+
+    def _close_native_viewer(self) -> None:
+        handle = self._native_viewer
+        self._native_viewer = None
+        if handle is not None:
+            try:
+                handle.close()
+            except Exception:
+                pass
 
     def _hold_native_viewer(self, seconds: float, phase: str) -> None:
         if not self.native_renderer or seconds <= 0:

@@ -26,8 +26,11 @@ LIBERO through a native MuJoCo/robosuite viewer for interactive inspection.
 - Added `scripts/make_fastwam_future_video_report.py`.
 - Added `configs/benchmarks/libero/fastwam_spatial_1trial.yaml`.
 - Added recorder unit coverage for live-video sink without mp4 recording.
-- Added `LIBEROBenchmark(native_renderer=true)` support using
-  `ControlEnv(has_renderer=True, has_offscreen_renderer=True)`.
+- Added `LIBEROBenchmark(native_renderer=true)` support using MuJoCo passive
+  viewer sync. The default `native_viewer_backend="mujoco_passive"` opens
+  `mujoco.viewer.launch_passive(model, data)` on the same LIBERO sim.
+- Kept robosuite/OpenCV onscreen rendering as
+  `native_viewer_backend="opencv"` for fixed-camera debugging only.
 - Added a strict native render check so viewer render failures fail the
   diagnostic benchmark instead of being hidden behind policy success.
 - Added an in-process GL backend guard: LIBERO native GLFW and headless EGL
@@ -73,8 +76,21 @@ LIBERO through a native MuJoCo/robosuite viewer for interactive inspection.
     `/tmp/yiming/wam_lab_fastwam_native_viewer_20260607_162649/native_viewer_post_reset_strict.png`.
   - Local copy:
     `/Users/javadcc/code/ssh/H200/artifacts/port26_fastwam_native_viewer/native_viewer_post_reset_strict.png`.
-  - The screenshot shows the robosuite/MuJoCo onscreen window titled
-    `offscreen render` with the full LIBERO tabletop scene.
+  - This run used robosuite's OpenCV `offscreen render` window. It showed the
+    full LIBERO tabletop scene, but did not provide draggable camera
+    interaction. The interactive path was subsequently changed to
+    `mujoco.viewer.launch_passive`.
+- MuJoCo passive viewer run:
+  - Output:
+    `~/workspace/code/wam-lab/results/fastwam_libero_native_viewer_20260607_164853`
+  - Result: `1/1 success`, 71 steps.
+  - VNC screenshot captured during the post-reset hold:
+    `/tmp/yiming/wam_lab_fastwam_native_viewer_20260607_164853/passive_before_drag.png`.
+  - Local copy:
+    `/Users/javadcc/code/ssh/H200/artifacts/port26_fastwam_native_viewer/passive/passive_before_drag.png`.
+  - The screenshot shows the MuJoCo passive viewer window titled
+    `MuJoCo : base` with MuJoCo's left/right UI panels, confirming this is no
+    longer the fixed-camera OpenCV `offscreen render` window.
 - Native viewer display stack:
   - `scripts/setup_mujoco_viewer_stack.sh` validated Xvfb, x11vnc, fluxbox, and
     proot runtime dependencies under `~/workspace/tools/mujoco-viewer-stack`.
@@ -91,13 +107,10 @@ LIBERO through a native MuJoCo/robosuite viewer for interactive inspection.
   packages and `proot`. This is suitable for debugging and visual inspection,
   but not optimized for benchmark throughput or GPU-accelerated desktop
   rendering.
-- Automated VNC screenshot capture is verified. Automated mouse-drag evidence
-  was not clean: the after-drag capture landed on the empty desktop after the
-  window closed. Manual noVNC interaction remains the intended validation path
-  for camera manipulation.
-- The viewer is LIBERO/robosuite's onscreen render window via
-  `ControlEnv(has_renderer=True)`. It should not be described as using the
-  newer standalone `mujoco.viewer` API.
+- Automated screenshot capture was verified for both the old OpenCV window and
+  the MuJoCo passive viewer. The old window was not interactive. The active
+  native viewer implementation is now the MuJoCo passive viewer path; validate
+  camera dragging through noVNC before relying on it for manual inspection.
 - Future-video integration is currently a WAM-Lab wrapper around FastWAM's
   official eval script, not yet surfaced through the WAM-Lab policy server API.
 - The spatial sweep is not the full official LIBERO evaluation protocol.

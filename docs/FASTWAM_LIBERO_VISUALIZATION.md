@@ -42,10 +42,12 @@ Notes:
 
 ## Native MuJoCo Viewer
 
-Use this when you need LIBERO's robosuite/MuJoCo onscreen viewer, including
-mouse camera interaction through VNC/noVNC. This uses robosuite
-`ControlEnv(has_renderer=True)` rather than the fixed WAM-Lab RGB stream or a
-sparse point-cloud view.
+Use this when you need MuJoCo's interactive viewer, including mouse camera
+interaction through VNC/noVNC. The default config uses
+`mujoco.viewer.launch_passive(model, data)` and calls `viewer.sync()` during the
+rollout. This is different from robosuite's OpenCV `offscreen render` window,
+which only displays a fixed camera image and does not handle mouse camera
+dragging.
 
 Prepare the noVNC/X11 stack once on the port-26 host:
 
@@ -83,9 +85,11 @@ CUDA_VISIBLE_DEVICES=0 scripts/run_fastwam_libero_native_viewer.sh
 Notes:
 
 - The benchmark config is `configs/benchmarks/libero/fastwam_native_viewer.yaml`.
-- `LIBEROBenchmark(native_renderer=true)` creates LIBERO through
-  `ControlEnv(has_renderer=True, has_offscreen_renderer=True)`, so the policy
-  still receives camera observations while the MuJoCo viewer window is shown.
+- `LIBEROBenchmark(native_renderer=true, native_viewer_backend="mujoco_passive")`
+  creates LIBERO with offscreen camera observations for the policy, then opens a
+  separate MuJoCo passive viewer on the same `MjModel` / `MjData`.
+- `native_viewer_backend="opencv"` is still available as a fixed-camera fallback,
+  but it should not be used when you need draggable camera interaction.
 - Native viewer rendering is strict by default: if the onscreen render call
   fails, the benchmark fails instead of reporting policy success with a broken
   viewer.

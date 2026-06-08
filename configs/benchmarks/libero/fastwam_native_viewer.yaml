@@ -1,7 +1,6 @@
-# FastWAM + LIBERO native MuJoCo/robosuite viewer.
-# This opens the real robosuite onscreen viewer in an X11 display. Use
-# scripts/start_mujoco_viewer_display.sh and noVNC port forwarding to interact
-# with the viewer window.
+# FastWAM + LIBERO native MuJoCo passive viewer.
+# This opens mujoco.viewer.launch_passive in an X11 display. Use noVNC port
+# forwarding to interact with the viewer window.
 server:
   url: "ws://localhost:8000"
   timeout: 300
@@ -29,6 +28,7 @@ benchmarks:
       send_raw_libero_obs: true
       send_privileged_3d: false
       native_renderer: true
+      native_viewer_backend: mujoco_passive
       render_camera: agentview
       native_viewer_reset_hold_sec: 30.0
       native_viewer_end_hold_sec: 10.0

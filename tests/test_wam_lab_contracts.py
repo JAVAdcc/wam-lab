@@ -106,11 +106,64 @@ def test_native_viewer_render_failure_is_fatal_by_default():
         def render(self):
             raise ValueError("viewer broken")
 
-    benchmark = LIBEROBenchmark(native_renderer=True)
+    benchmark = LIBEROBenchmark(native_renderer=True, native_viewer_backend="opencv")
     benchmark._env = BrokenViewer()
 
     with pytest.raises(RuntimeError, match="Native MuJoCo viewer render failed"):
         benchmark._render_native_viewer()
+
+
+def test_mujoco_passive_native_viewer_launches_and_syncs(monkeypatch):
+    class FakeCam:
+        def __init__(self):
+            self.lookat = np.zeros(3, dtype=np.float64)
+            self.distance = 0.0
+            self.azimuth = 0.0
+            self.elevation = 0.0
+            self.type = None
+            self.fixedcamid = None
+
+    class FakeHandle:
+        def __init__(self):
+            self.cam = FakeCam()
+            self.sync_count = 0
+
+        def is_running(self):
+            return True
+
+        def sync(self):
+            self.sync_count += 1
+
+    class FakeSim:
+        model = type("Model", (), {"_model": object()})()
+        data = type("Data", (), {"_data": object()})()
+
+    class FakeEnv:
+        sim = FakeSim()
+
+    launched = {}
+    handle = FakeHandle()
+
+    def fake_launch_passive(model, data, **kwargs):
+        launched["model"] = model
+        launched["data"] = data
+        launched["kwargs"] = kwargs
+        return handle
+
+    import mujoco.viewer
+
+    monkeypatch.setattr(mujoco.viewer, "launch_passive", fake_launch_passive)
+
+    benchmark = LIBEROBenchmark(native_renderer=True)
+    benchmark._env = FakeEnv()
+    benchmark._render_native_viewer()
+
+    assert launched["model"] is FakeSim.model._model
+    assert launched["data"] is FakeSim.data._data
+    assert launched["kwargs"] == {"show_left_ui": True, "show_right_ui": True}
+    assert handle.cam.fixedcamid == -1
+    assert handle.cam.distance == 2.0
+    assert handle.sync_count == 1
 
 
 def test_contract_report_marks_payload_check_skipped_when_no_payload_keys_are_available():
